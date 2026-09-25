@@ -7,7 +7,7 @@ Maintained by [Stabilise](https://stabilise.io), a London-based Apple IT managed
 > [!IMPORTANT]
 > This is an unofficial workaround. Stabilise is not affiliated with, endorsed by or supported by Vectorworks, Inc., Nemetschek or Apple. The script modifies one component inside the Vectorworks installation. It keeps a complete backup of that component and can restore it at any time, but you use it at your own risk. The proper long-term fix is an update from Vectorworks built for macOS 27.
 
-**Testing status:** the script passes its automated test suite on macOS 27.0. It is being tested on a real Vectorworks 2025 installation, and the [compatibility table](#compatibility) will be updated with the results.
+**Testing status:** tested on a real Vectorworks 2025 Update 8 installation on macOS 27.0, where it fixed the launch failure and its rollback restored the original exactly. See [Compatibility](#compatibility).
 
 ## Contents
 
@@ -80,11 +80,11 @@ Running the script with `bash` in front of it, as shown, means macOS does not ne
 
 ## What you will see
 
-A successful run looks like this:
+This is a real run on Vectorworks 2025 Update 8 on macOS 27.0, started with `--yes` so it did not stop to ask (the test Mac's clock was set to US Pacific time). Without `--yes`, the "Continue?" line waits for you to type `y`:
 
 ```text
 Vectorworks macOS 27 iODBC fix 1.0.0 (Stabilise)
-Started 24/09/2026 13:18:53 BST, action: apply
+Started 24/09/2026 21:53:11 PDT, action: apply
 Log: /Library/Logs/Stabilise/vectorworks-iodbc-fix.log
 
 ==> Checking this Mac
@@ -95,12 +95,12 @@ Log: /Library/Logs/Stabilise/vectorworks-iodbc-fix.log
     OK      Command Line Tools present (/Library/Developer/CommandLineTools)
 
 ==> Looking for Vectorworks in /Applications
-    ..      Vectorworks 2025, version 2025.0.8 (790100): Needs the fix
+    ..      Vectorworks 2025, version 30.8.842584: Needs the fix
 
 The fix will be applied to:
     Vectorworks 2025
 
-Continue? [y/N]: y
+Continue? [yes, unattended]
 
 ==> Making sure Vectorworks is closed
     OK      Vectorworks is not running
@@ -113,8 +113,8 @@ Continue? [y/N]: y
 
 ==> Fixing Vectorworks 2025
     OK      Original Support plug-in is intact and signed
-    OK      All 38 iODBC functions the plug-in uses are present
-    OK      Backup saved: /Library/Application Support/Stabilise/Vectorworks iODBC Fix/backups/Vectorworks 2025/20260924T121929Z
+    OK      All 28 iODBC functions the plug-in uses are present
+    OK      Backup saved: /Library/Application Support/Stabilise/Vectorworks iODBC Fix/backups/Vectorworks 2025/20260925T045326Z
     OK      Library added and reference updated (in a staging copy)
     OK      Updated plug-in signed and verified
     OK      Vectorworks 2025 is fixed
@@ -124,7 +124,7 @@ Continue? [y/N]: y
     Vectorworks 2025: fixed
 ```
 
-The version numbers and the number of functions will differ on your Mac. Every run is also written to `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`, which is the file to send if you need help.
+The version and the number of functions may differ on your Mac. Every run is also written to `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`, which is the file to send if you need help.
 
 ## Commands and options
 
@@ -290,7 +290,7 @@ The script decides what to fix by inspecting each installation, not by its versi
 
 | Vectorworks version | Status |
 |---|---|
-| 2025 | Automated tests pass. Test on a real installation in progress. |
+| 2025 Update 8 (build 842584) | **Tested** on macOS 27.0 (26A428), Apple silicon, 25/09/2026. The fix applied, Vectorworks launched with the added library loaded, and a second run correctly did nothing. Rollback restored the original Support file byte for byte with its Vectorworks signature, and the original error returned. Refusal while Vectorworks was open, the Jamf Pro run, and the script run on its own (downloading and verifying the source from GitHub) also behaved as documented. |
 | 2024, 2026 and earlier versions | Should work wherever the check above matches. Not yet tested on a real installation by Stabilise. |
 
 The results of real-installation testing will be recorded here. If you use the script on a version not listed, we would be glad to hear how it went: [hello@stabilise.io](mailto:hello@stabilise.io).
@@ -300,7 +300,7 @@ The results of real-installation testing will be recorded here. If you use the s
 The first community fix, [created by Wagner R. Ponce (ANIFONIX)](https://github.com/wkrodrig/vectorworks-2025-2026-wont-launch-macos27-fix), diagnosed this fault and deserves the credit for it. It installs Homebrew, a third-party package manager, and points Vectorworks at Homebrew's copy of iODBC in `/opt/homebrew`. This script takes a different approach for three reasons:
 
 - **Less to install.** Homebrew is a large, permanent addition to a Mac whose only purpose here would be to supply one library. This script builds that library once, puts it inside Vectorworks and leaves nothing else behind.
-- **Security.** Homebrew's folder belongs to the user who installed it, so any program running as that user could replace the library, and Vectorworks would then load the replacement. The library this script adds sits inside the Vectorworks installation, with the same file permissions as the rest of Vectorworks, and it is sealed into the plug-in's signature, so `--check` reports the fix as damaged if the library is changed or removed.
+- **Easier to check.** The library this script adds is sealed into the Support plug-in's signature, so `--check` reports the fix as damaged if the library is changed or removed. A library in Homebrew's folder has no such link to Vectorworks. Note that neither method changes who can write to the files: Homebrew's folder belongs to the user who installed it, and a Vectorworks installation can belong to the user who installed it too, as it did on our test Mac. On such a Mac, a program running as that user could replace either library.
 - **Self-contained.** The fix does not depend on anything outside Vectorworks, so updating or removing Homebrew cannot break Vectorworks, and a Vectorworks update removes the fix cleanly.
 
 Placing the library inside the Support plug-in follows the approach [Mike Hayes reported working](https://github.com/wkrodrig/vectorworks-2025-2026-wont-launch-macos27-fix/issues/2) on Vectorworks 2022 SP6.

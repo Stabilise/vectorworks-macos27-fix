@@ -164,6 +164,11 @@ expect_code "check reports that a fix is needed (exit 10)" 10
 expect_out  "check lists the affected installation" "Vectorworks 2025, version 2025.0.8 (790100): Needs the fix"
 expect_out  "check lists the unaffected installation" "Vectorworks 2024, version 2024.0.8 (700200): Not affected"
 
+set_build "Vectorworks 2025" 2025.0.8
+run --check
+expect_out  "a version stored twice is shown once" "Vectorworks 2025, version 2025.0.8: Needs the fix"
+set_build "Vectorworks 2025" 790100
+
 run / "TEST-MAC" "testuser" "--check"
 expect_code "accepts Jamf Pro's argument layout" 10
 expect_ea   "Jamf extension attribute reports Needs Fix" "Needs Fix"
@@ -236,6 +241,10 @@ expect_code "rollback refuses when Vectorworks has changed version" 1
 expect_out  "rollback explains the version mismatch" "Restoring it would mix versions"
 [ "$(refs_of "Vectorworks 2025")" = "$NEW_REF" ] && pass "fix still in place after the refusal" || fail "fix still in place after the refusal"
 set_build "Vectorworks 2025" 790100
+
+# Backups made before the version display changed record "2025.0.8 (790100)";
+# the display change must not stop them being restored.
+/usr/bin/grep -q '^vectorworks=2025.0.8 (790100)$' "$B/backup-info.txt" && pass "backup keeps the full version form for rollback" || fail "backup keeps the full version form for rollback"
 
 run --rollback --yes
 expect_code "rollback succeeds" 0

@@ -149,7 +149,9 @@ parse_args() {
 
 # ------------------------------------------------------ cleanup and logging --
 
-# shellcheck disable=SC2329  # invoked by the EXIT trap
+# Called by the EXIT trap. ShellCheck 0.9 reports this as SC2317, later
+# versions as SC2329.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   local status=$?
   # If we stopped between moving the original plug-in out and the new one in,
@@ -257,7 +259,7 @@ check_tools() {
 list_installs() {
   local dir
   for dir in "$APPS_DIR"/Vectorworks*; do
-    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    if [ ! -d "$dir" ] || [ -L "$dir" ]; then continue; fi
     [ -n "$(support_bundle_of "$dir")" ] || continue
     if [ -n "$ONLY" ] && [ "$(basename "$dir")" != "$ONLY" ]; then
       continue
@@ -293,13 +295,28 @@ app_of() {
   return 1
 }
 
+# "short-version (build)" from the app's Info.plist. Backups record this exact
+# form and rollback compares against it, so it must not change.
 app_build_of() {
-  local app
+  local app short build
   app="$(app_of "$1")" || { printf 'unknown'; return; }
-  local short build
   short="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null)"
   build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist" 2>/dev/null)"
   printf '%s (%s)' "${short:-unknown}" "${build:-unknown}"
+}
+
+# The version as shown to people. Vectorworks 2025 stores the same value in
+# both keys, so "30.8.842584 (30.8.842584)" is shown as "30.8.842584".
+app_version_label() {
+  local full short rest
+  full="$(app_build_of "$1")"
+  short="${full%% (*}"
+  rest="${full#* (}"
+  if [ "$rest" = "$short)" ]; then
+    printf '%s' "$short"
+  else
+    printf '%s' "$full"
+  fi
 }
 
 # Prints "path compatibility-version" for every iODBC reference in the arm64
@@ -762,7 +779,7 @@ main() {
   while IFS= read -r install; do
     [ -n "$install" ] || continue
     state="$(classify "$install")"
-    line="$(basename "$install"), version $(app_build_of "$install"): $(describe_state "$state")"
+    line="$(basename "$install"), version $(app_version_label "$install"): $(describe_state "$state")"
     case "$state" in
       affected) affected="$affected
 $install"; attention=1; info "$line" ;;
