@@ -1,0 +1,19 @@
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the scripts with ShellCheck
+        run: shellcheck -s bash vectorworks-iodbc-fix.sh jamf/extension-attribute.sh tests/run-tests.sh
+      - name: Check the vendored iODBC source checksum
+        run: echo "3898b32d07961360f6f2cf36db36036b719a230e476469258a80f32243e845fa  vendor/libiodbc-3.52.16.tar.gz" | sha256sum -c -
