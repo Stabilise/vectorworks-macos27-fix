@@ -224,7 +224,7 @@ start_user_log() {
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   dest="$dir/$USER_LOG_NAME"
   as_user /bin/rm -f "$dest" 2>/dev/null || return 1
-  /bin/cat "$LOG_FILE" | as_user /usr/bin/tee "$dest" >/dev/null 2>&1 || return 1
+  as_user /usr/bin/tee "$dest" < "$LOG_FILE" >/dev/null 2>&1 || return 1
   USER_LOG="$dest"
 }
 
