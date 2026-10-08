@@ -12,7 +12,7 @@
 # A complete backup is taken first and every change can be rolled back.
 #
 # Usage: sudo ./vectorworks-iodbc-fix.sh [--check | --apply | --rollback]
-#        [--only "Vectorworks 2025"] [--yes]
+#        [--only "Vectorworks 2025"] [--yes] [--accept-unverified-original]
 #
 # Full documentation: README.md, or
 # https://github.com/Stabilise/vectorworks-macos27-fix
@@ -22,7 +22,7 @@
 
 set -u -o pipefail
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 
 readonly IODBC_VERSION="3.52.16"
 readonly IODBC_TARBALL="libiodbc-${IODBC_VERSION}.tar.gz"
@@ -41,7 +41,14 @@ readonly MIN_MACOS_MAJOR=27
 APPS_DIR="${VWFIX_APPS_DIR:-/Applications}"
 STATE_DIR="${VWFIX_STATE_DIR:-/Library/Application Support/Stabilise/Vectorworks iODBC Fix}"
 LOG_FILE="${VWFIX_LOG_FILE:-/Library/Logs/Stabilise/vectorworks-iodbc-fix.log}"
+USER_LOG_DIR="${VWFIX_USER_LOG_DIR:-}"
 BACKUP_DIR="$STATE_DIR/backups"
+
+# A copy of the log in the Downloads folder of the person who ran the script,
+# because /Library/Logs is easily confused with the Library folder in their
+# home folder.
+readonly USER_LOG_NAME="Vectorworks fix log.txt"
+USER_LOG=""
 
 readonly EXIT_OK=0
 readonly EXIT_ERROR=1
@@ -56,6 +63,7 @@ readonly SCRIPT_DIR
 
 MODE="apply"
 ASSUME_YES=0
+ACCEPT_UNVERIFIED=0
 ONLY=""
 WORK_DIR=""
 BUILT_LIB=""
@@ -102,6 +110,10 @@ Actions:
 Options:
   --only NAME   Act on one installation folder only, for example "Vectorworks 2025".
   --yes, -y     Do not ask for confirmation (for Jamf and other unattended runs).
+  --accept-unverified-original
+                Fix a Support plug-in even though Vectorworks' own signature on it
+                does not verify. Only use this after reinstalling Vectorworks has
+                not cleared the warning. The backup can still be rolled back.
   --help, -h    Show this help.
   --version     Show the script version.
 
@@ -113,13 +125,15 @@ EOF
 
 parse_args() {
   # Jamf Pro passes the mount point, computer name and user name as the first
-  # three arguments. Parameter 4 is the action and parameter 5 the name of a
-  # single installation, which may contain spaces.
+  # three arguments. Parameter 4 is the action, parameter 5 the name of a
+  # single installation, which may contain spaces, and parameter 6 an extra
+  # option such as --accept-unverified-original.
   if [ $# -ge 3 ] && [ "$1" = "/" ]; then
-    local jamf_action="${4:-}" jamf_only="${5:-}"
+    local jamf_action="${4:-}" jamf_only="${5:-}" jamf_option="${6:-}"
     set --
     [ -n "$jamf_action" ] && set -- "$jamf_action"
     [ -n "$jamf_only" ] && set -- "$@" --only "$jamf_only"
+    [ -n "$jamf_option" ] && set -- "$@" "$jamf_option"
     ASSUME_YES=1
   fi
 
@@ -133,6 +147,7 @@ parse_args() {
         ONLY="$2"; shift ;;
       --only=*)   ONLY="${1#*=}" ;;
       --yes|-y)   ASSUME_YES=1 ;;
+      --accept-unverified-original) ACCEPT_UNVERIFIED=1 ;;
       --version)  say "$SCRIPT_VERSION"; exit "$EXIT_OK" ;;
       --help|-h)  usage; exit "$EXIT_OK" ;;
       "")         ;;
@@ -166,15 +181,63 @@ cleanup() {
     done
   fi
   [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ] && /bin/rm -rf "$WORK_DIR"
+  [ -n "$USER_LOG" ] && printf '\nA copy of the log is in your Downloads folder: %s\n' "$USER_LOG_NAME"
   exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
+# The Downloads folder of the person who started the script with sudo. Empty
+# when nobody did, for example when Jamf runs it.
+user_downloads() {
+  local home
+  if [ -n "$USER_LOG_DIR" ]; then
+    printf '%s' "$USER_LOG_DIR"
+    return 0
+  fi
+  case "${SUDO_USER:-}" in ""|root) return 1 ;; esac
+  home="$(/usr/bin/dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | /usr/bin/awk '{print $2}')"
+  [ -n "$home" ] || return 1
+  printf '%s' "$home/Downloads"
+}
+
+# Runs a command as the person who started the script with sudo. The script
+# runs as root, and their Downloads folder is theirs to change at any moment,
+# so anything written there must be written with their rights, never root's.
+# Otherwise a link placed there could make root overwrite or take ownership
+# of a system file.
+as_user() {
+  if [ "$(/usr/bin/id -u)" -eq 0 ]; then
+    case "${SUDO_USER:-}" in ""|root) return 1 ;; esac
+    /usr/bin/sudo -n -u "$SUDO_USER" -- "$@"
+  else
+    "$@"
+  fi
+}
+
+# Starts the copy of the log in Downloads with everything logged so far, so it
+# holds earlier runs too. Any existing file or link of that name is removed
+# first rather than written through.
+start_user_log() {
+  local dir dest
+  dir="$(user_downloads)" || return 1
+  [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+  dest="$dir/$USER_LOG_NAME"
+  as_user /bin/rm -f "$dest" 2>/dev/null || return 1
+  as_user /usr/bin/tee "$dest" < "$LOG_FILE" >/dev/null 2>&1 || return 1
+  USER_LOG="$dest"
+}
+
 start_log() {
+  local user_log_failed=0
   /bin/mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
   if /usr/bin/touch "$LOG_FILE" 2>/dev/null; then
-    exec > >(/usr/bin/tee -a "$LOG_FILE") 2>&1
+    if start_user_log; then
+      exec > >(/usr/bin/tee -a "$LOG_FILE" | as_user /usr/bin/tee -a "$USER_LOG") 2>&1
+    else
+      user_downloads >/dev/null && user_log_failed=1
+      exec > >(/usr/bin/tee -a "$LOG_FILE") 2>&1
+    fi
   else
     LOG_FILE=""
   fi
@@ -182,6 +245,9 @@ start_log() {
   say "Vectorworks macOS 27 iODBC fix $SCRIPT_VERSION (Stabilise)"
   say "Started $(/bin/date '+%d/%m/%Y %H:%M:%S %Z'), action: $MODE"
   [ -n "$LOG_FILE" ] && say "Log: $LOG_FILE"
+  [ -n "$USER_LOG" ] && say "Copy of the log: your Downloads folder, \"$USER_LOG_NAME\""
+  [ "$user_log_failed" -eq 1 ] && say "(A copy of the log could not be saved to your Downloads folder.)"
+  return 0
 }
 
 confirm() {
@@ -330,6 +396,17 @@ iodbc_refs() {
     for (i = 2; i < NF; i++) if ($i == "(compatibility" && $(i+1) == "version") { compat = $(i+2); sub(/,$/, "", compat) }
     print $1, compat
   }'
+}
+
+# Prints codesign's explanation of why a plug-in's signature does not verify,
+# at most 40 lines, indented to sit under a warning.
+signature_problem() {
+  local detail lines
+  detail="$(/usr/bin/codesign --verify --deep --strict -vvvv "$1" 2>&1)"
+  lines="$(printf '%s\n' "$detail" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+  printf '%s\n' "$detail" | /usr/bin/head -n 40 | /usr/bin/sed 's/^/              /'
+  [ "$lines" -gt 40 ] && printf '              (%s more lines not shown)\n' "$((lines - 40))"
+  return 0
 }
 
 # Prints one word describing an installation:
@@ -521,7 +598,7 @@ undo_swap() {
 # --------------------------------------------------------------- backups -----
 
 make_backup() {
-  local install="$1" bundle="$2" executable="$3" root dir
+  local install="$1" bundle="$2" executable="$3" signature="$4" root dir
   root="$BACKUP_DIR/$(basename "$install")"
   /bin/mkdir -p "$root" && /bin/chmod 700 "$STATE_DIR" "$BACKUP_DIR" 2>/dev/null
   dir="$root/$(/bin/date -u '+%Y%m%dT%H%M%SZ')"
@@ -535,6 +612,7 @@ make_backup() {
     printf 'plugin=%s\n' "$bundle"
     printf 'vectorworks=%s\n' "$(app_build_of "$install")"
     printf 'support_sha256=%s\n' "$(/usr/bin/shasum -a 256 "$executable" | /usr/bin/awk '{print $1}')"
+    printf 'original_signature=%s\n' "$signature"
     printf 'created_utc=%s\n' "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
     printf 'script_version=%s\n' "$SCRIPT_VERSION"
   } > "$dir/backup-info.txt"
@@ -568,22 +646,37 @@ add_library() {
 }
 
 apply_one() {
-  local install="$1" name bundle executable owner backup staging staged
+  local install="$1" name bundle executable owner backup staging staged signature="verified"
   name="$(basename "$install")"
   bundle="$(support_bundle_of "$install")"
   executable="$(support_exec_of "$bundle")"
   step "Fixing $name"
 
+  # The plug-in still refers to the original system library (classify checked
+  # that), so it has not been patched by this script or the Homebrew method.
+  # A signature that does not verify means something else changed it, or it
+  # was shipped that way.
   if ! /usr/bin/codesign --verify --deep --strict "$bundle" >/dev/null 2>&1; then
     warn "The Support plug-in's original signature does not verify, so it may already have been altered."
-    warn "Reinstall or update Vectorworks $name, then run this again."
-    return 1
+    say  "            The reason macOS gives:"
+    signature_problem "$bundle"
+    if [ "$ACCEPT_UNVERIFIED" -ne 1 ]; then
+      warn "Reinstall or update $name, then run this again."
+      warn "If you have already reinstalled it and still see this, run the script again with"
+      warn "--accept-unverified-original added to the command."
+      return 1
+    fi
+    warn "--accept-unverified-original was given, so the fix can continue. The plug-in will be"
+    warn "backed up exactly as it is now, and --rollback will restore it in this same state."
+    confirm "Fix $name anyway?" || { warn "Skipped. $name has not been changed."; return 1; }
+    signature="unverified"
+  else
+    ok "Original Support plug-in is intact and signed"
   fi
-  ok "Original Support plug-in is intact and signed"
 
   check_symbols "$executable" "$BUILT_LIB"
 
-  backup="$(make_backup "$install" "$bundle" "$executable")" || { warn "Could not create a verified backup. $name has not been changed."; return 1; }
+  backup="$(make_backup "$install" "$bundle" "$executable" "$signature")" || { warn "Could not create a verified backup. $name has not been changed."; return 1; }
   ok "Backup saved: $backup"
 
   new_staging_dir "$bundle" || { warn "Could not create a staging folder. $name has not been changed."; return 1; }
@@ -708,7 +801,11 @@ rollback_one() {
   staging="$NEW_STAGING"
   staged="$staging/Support.vwlibrary"
   /usr/bin/ditto "$backup/Support.vwlibrary" "$staged" || { warn "Could not copy the backup."; return 1; }
-  if ! /usr/bin/codesign --verify --deep --strict "$staged" >/dev/null 2>&1; then
+  # A backup taken with --accept-unverified-original never had a valid
+  # signature, so its checksums are what prove it is the original.
+  if [ "$(backup_value "$backup" original_signature)" = "unverified" ]; then
+    info "This backup was taken with --accept-unverified-original, so its signature is not checked"
+  elif ! /usr/bin/codesign --verify --deep --strict "$staged" >/dev/null 2>&1; then
     warn "The backup's original signature does not verify. Nothing has been restored."
     return 1
   fi
