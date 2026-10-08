@@ -201,20 +201,30 @@ user_downloads() {
   printf '%s' "$home/Downloads"
 }
 
+# Runs a command as the person who started the script with sudo. The script
+# runs as root, and their Downloads folder is theirs to change at any moment,
+# so anything written there must be written with their rights, never root's.
+# Otherwise a link placed there could make root overwrite or take ownership
+# of a system file.
+as_user() {
+  if [ "$(/usr/bin/id -u)" -eq 0 ]; then
+    case "${SUDO_USER:-}" in ""|root) return 1 ;; esac
+    /usr/bin/sudo -n -u "$SUDO_USER" -- "$@"
+  else
+    "$@"
+  fi
+}
+
 # Starts the copy of the log in Downloads with everything logged so far, so it
-# holds earlier runs too, and leaves it owned by that person. Any existing
-# file or link of that name is removed first rather than written through.
+# holds earlier runs too. Any existing file or link of that name is removed
+# first rather than written through.
 start_user_log() {
-  local dir dest owner
+  local dir dest
   dir="$(user_downloads)" || return 1
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   dest="$dir/$USER_LOG_NAME"
-  /bin/rm -f "$dest" 2>/dev/null
-  /bin/cp "$LOG_FILE" "$dest" 2>/dev/null || return 1
-  if [ "$(/usr/bin/id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-    owner="$(/usr/bin/id -u "$SUDO_USER" 2>/dev/null):$(/usr/bin/id -g "$SUDO_USER" 2>/dev/null)"
-    /usr/sbin/chown "$owner" "$dest" 2>/dev/null
-  fi
+  as_user /bin/rm -f "$dest" 2>/dev/null || return 1
+  /bin/cat "$LOG_FILE" | as_user /usr/bin/tee "$dest" >/dev/null 2>&1 || return 1
   USER_LOG="$dest"
 }
 
@@ -223,7 +233,7 @@ start_log() {
   /bin/mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
   if /usr/bin/touch "$LOG_FILE" 2>/dev/null; then
     if start_user_log; then
-      exec > >(/usr/bin/tee -a "$LOG_FILE" "$USER_LOG") 2>&1
+      exec > >(/usr/bin/tee -a "$LOG_FILE" | as_user /usr/bin/tee -a "$USER_LOG") 2>&1
     else
       user_downloads >/dev/null && user_log_failed=1
       exec > >(/usr/bin/tee -a "$LOG_FILE") 2>&1
