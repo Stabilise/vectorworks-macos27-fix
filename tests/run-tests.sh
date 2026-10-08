@@ -25,7 +25,10 @@ trap '/bin/rm -rf "$T"' EXIT
 export VWFIX_APPS_DIR="$T/Applications"
 export VWFIX_STATE_DIR="$T/State"
 export VWFIX_LOG_FILE="$T/fix.log"
+export VWFIX_USER_LOG_DIR="$T/Downloads"
 export VWFIX_ALLOW_NON_ROOT=1
+/bin/mkdir -p "$VWFIX_USER_LOG_DIR"
+USER_LOG="$VWFIX_USER_LOG_DIR/Vectorworks fix log.txt"
 
 OLD_REF="/usr/lib/libiodbc.2.dylib"
 NEW_REF="@loader_path/../Frameworks/libiodbc.2.dylib"
@@ -212,6 +215,7 @@ BACKUPS="$(/bin/ls -1 "$VWFIX_STATE_DIR/backups/Vectorworks 2025" 2>/dev/null | 
 B="$VWFIX_STATE_DIR/backups/Vectorworks 2025/$(/bin/ls -1 "$VWFIX_STATE_DIR/backups/Vectorworks 2025" | /usr/bin/tail -n 1)"
 [ "$(/usr/bin/shasum -a 256 "$B/Support.vwlibrary/Contents/MacOS/Support" | /usr/bin/awk '{print $1}')" = "$ORIGINAL_SHA" ] && pass "backup holds the original Support file" || fail "backup holds the original Support file"
 /usr/bin/grep -q '^vectorworks=2025.0.8 (790100)$' "$B/backup-info.txt" && pass "backup records the Vectorworks version" || fail "backup records the Vectorworks version"
+/usr/bin/grep -q '^original_signature=verified$' "$B/backup-info.txt" && pass "backup records that the original signature verified" || fail "backup records that the original signature verified"
 LEFTOVER="$(/usr/bin/find "$VWFIX_APPS_DIR" -name '.vwfix-staging.*' | /usr/bin/head -n 1)"
 [ -z "$LEFTOVER" ] && pass "no staging folders left behind" || fail "no staging folders left behind" "$LEFTOVER"
 
@@ -266,12 +270,81 @@ expect_out  "a Homebrew-patched install is reported" "Patched by the community H
 [ "$(refs_of "Vectorworks 2025")" = "$HOMEBREW_REF" ] && pass "a Homebrew-patched install is left alone" || fail "a Homebrew-patched install is left alone"
 expect_ea   "Jamf extension attribute reports the Homebrew method" "Patched By Homebrew Method"
 
+printf '\nA plug-in whose original signature does not verify\n'
 reset_installs
-printf 'altered\n' >> "$(support_of "Vectorworks 2025")/Contents/Resources/strings.txt"
+STRINGS="$(support_of "Vectorworks 2025")/Contents/Resources/strings.txt"
+printf 'altered\n' >> "$STRINGS"
+ALTERED_SHA="$(/usr/bin/shasum -a 256 "$STRINGS" | /usr/bin/awk '{print $1}')"
 run --apply --yes
 expect_code "apply refuses a plug-in whose signature is broken" 1
 expect_out  "and says why" "original signature does not verify"
+expect_out  "shows the reason macOS gives" "file modified"
+expect_out  "points to the option for when a reinstall has not helped" "--accept-unverified-original"
 [ "$(refs_of "Vectorworks 2025")" = "$OLD_REF" ] && pass "the altered plug-in is unchanged" || fail "the altered plug-in is unchanged"
+[ ! -d "$VWFIX_STATE_DIR/backups/Vectorworks 2025" ] && pass "no backup taken when refusing" || fail "no backup taken when refusing"
+
+run --apply --accept-unverified-original
+expect_code "the option still needs confirmation when nobody can answer" 1
+[ "$(refs_of "Vectorworks 2025")" = "$OLD_REF" ] && pass "nothing changed without confirmation" || fail "nothing changed without confirmation"
+
+run --apply --yes --accept-unverified-original
+expect_code "apply with --accept-unverified-original succeeds" 0
+expect_out  "it explains that it is continuing" "--accept-unverified-original was given"
+expect_out  "it reports the installation as fixed" "Vectorworks 2025: fixed"
+[ "$(refs_of "Vectorworks 2025")" = "$NEW_REF" ] && pass "the plug-in points at the bundled library" || fail "the plug-in points at the bundled library"
+/usr/bin/codesign --verify --deep --strict "$(support_of "Vectorworks 2025")" 2>/dev/null && pass "the fixed plug-in has a valid signature" || fail "the fixed plug-in has a valid signature"
+"$FIX/probe" "$(support_of "Vectorworks 2025")/Contents/MacOS/Support" >/dev/null 2>&1 && pass "the fixed plug-in loads and calls real iODBC" || fail "the fixed plug-in loads and calls real iODBC"
+B="$VWFIX_STATE_DIR/backups/Vectorworks 2025/$(/bin/ls -1 "$VWFIX_STATE_DIR/backups/Vectorworks 2025" | /usr/bin/tail -n 1)"
+/usr/bin/grep -q '^original_signature=unverified$' "$B/backup-info.txt" && pass "the backup records the unverified signature" || fail "the backup records the unverified signature"
+run --check
+expect_code "check reports the forced fix as fixed" 0
+expect_out  "and names it Fixed" "Vectorworks 2025, version 2025.0.8 (790100): Fixed"
+
+run --rollback --yes
+expect_code "rollback of a forced fix succeeds" 0
+expect_out  "and says the signature is not checked" "its signature is not checked"
+[ "$(refs_of "Vectorworks 2025")" = "$OLD_REF" ] && pass "the original reference is restored" || fail "the original reference is restored"
+[ "$(/usr/bin/shasum -a 256 "$STRINGS" | /usr/bin/awk '{print $1}')" = "$ALTERED_SHA" ] && pass "the plug-in is restored exactly as it was found" || fail "the plug-in is restored exactly as it was found"
+[ "$(/usr/bin/shasum -a 256 "$(support_of "Vectorworks 2025")/Contents/MacOS/Support" | /usr/bin/awk '{print $1}')" = "$ORIGINAL_SHA" ] && pass "the original Support file is restored exactly" || fail "the original Support file is restored exactly"
+
+run --apply --yes --accept-unverified-original
+B2="$VWFIX_STATE_DIR/backups/Vectorworks 2025/$(/bin/ls -1 "$VWFIX_STATE_DIR/backups/Vectorworks 2025" | /usr/bin/tail -n 1)"
+/bin/echo "tampered" >> "$B2/Support.vwlibrary/Contents/Resources/strings.txt"
+run --rollback --yes
+expect_code "rollback refuses a forced backup that fails its checksums" 1
+expect_out  "and explains why" "do not match its checksums"
+[ "$(refs_of "Vectorworks 2025")" = "$NEW_REF" ] && pass "the fix stays in place after the refusal" || fail "the fix stays in place after the refusal"
+
+reset_installs
+/usr/bin/codesign --remove-signature "$(support_of "Vectorworks 2025")" 2>/dev/null
+/usr/bin/codesign --remove-signature "$(support_of "Vectorworks 2025")/Contents/MacOS/Support" 2>/dev/null
+run --apply --yes
+expect_code "apply refuses an unsigned plug-in" 1
+run --apply --yes --accept-unverified-original
+expect_code "apply with --accept-unverified-original fixes an unsigned plug-in" 0
+/usr/bin/codesign --verify --deep --strict "$(support_of "Vectorworks 2025")" 2>/dev/null && pass "the fixed plug-in is signed" || fail "the fixed plug-in is signed"
+
+reset_installs
+printf 'altered\n' >> "$(support_of "Vectorworks 2025")/Contents/Resources/strings.txt"
+run / "TEST-MAC" "testuser" "--apply" "" "--accept-unverified-original"
+expect_code "Jamf parameter 6 passes --accept-unverified-original" 0
+expect_out  "and the installation is fixed" "Vectorworks 2025: fixed"
+
+printf '\nCopy of the log in Downloads\n'
+reset_installs
+/bin/rm -f "$USER_LOG"
+/bin/ln -s "$T/link-target" "$USER_LOG"
+run --check
+[ -f "$USER_LOG" ] && [ ! -L "$USER_LOG" ] && pass "a link in Downloads is replaced, not written through" || fail "a link in Downloads is replaced, not written through"
+[ ! -e "$T/link-target" ] && pass "the link's target is untouched" || fail "the link's target is untouched"
+expect_out  "the run says where the copy is" "A copy of the log is in your Downloads folder: Vectorworks fix log.txt"
+/usr/bin/grep -q "At least one installation needs the fix" "$USER_LOG" && pass "the copy includes the end of the run" || fail "the copy includes the end of the run"
+/usr/bin/grep -q "action: apply" "$USER_LOG" && pass "the copy includes earlier runs" || fail "the copy includes earlier runs"
+/bin/rm -rf "$VWFIX_USER_LOG_DIR"
+run --check
+expect_code "a missing Downloads folder does not stop the run" 10
+expect_out  "and says the copy could not be saved" "could not be saved to your Downloads folder"
+/bin/mkdir -p "$VWFIX_USER_LOG_DIR"
 
 printf '\nSource integrity\n'
 reset_installs

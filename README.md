@@ -13,6 +13,7 @@ Maintained by [Stabilise](https://stabilise.io), a London-based Apple IT managed
 
 - [Is this for you?](#is-this-for-you)
 - [Quick start](#quick-start)
+- [Getting the latest version](#getting-the-latest-version)
 - [What you will see](#what-you-will-see)
 - [Commands and options](#commands-and-options)
 - [Deploying with Jamf Pro](#deploying-with-jamf-pro)
@@ -78,6 +79,23 @@ You do not need to be sure of the cause yourself. The script checks it: it only 
 
 Running the script with `bash` in front of it, as shown, means macOS does not need to be told that the downloaded file is allowed to run, so there is no need to change its permissions or remove download warnings.
 
+## Getting the latest version
+
+If you downloaded the script before and have been asked to use a newer version, replace your copy like this:
+
+1. **Remove the old copy.** In Finder, open your Downloads folder and move the `vectorworks-macos27-fix-main` folder to the Bin. If you skip this, the new download is saved as `vectorworks-macos27-fix-main 2` and the commands below will still find the old copy.
+
+2. **Download it again.** On the repository's GitHub page, click **Code**, then **Download ZIP**, and open the downloaded file so that it unzips into your Downloads folder. If you used Git, run `git pull` in your copy instead.
+
+3. **Check the version.** In Terminal:
+
+   ```bash
+   cd ~/Downloads/vectorworks-macos27-fix-main
+   bash vectorworks-iodbc-fix.sh --version
+   ```
+
+   This shows the version number, for example `1.1.0`, without changing anything and without asking for your password. Then continue from step 4 of the [quick start](#quick-start).
+
 ## What you will see
 
 This is a real run on Vectorworks 2025 Update 8 on macOS 27.0, started with `--yes` so it did not stop to ask (the test Mac's clock was set to US Pacific time). Without `--yes`, the "Continue?" line waits for you to type `y`:
@@ -124,7 +142,9 @@ Continue? [yes, unattended]
     Vectorworks 2025: fixed
 ```
 
-The version and the number of functions may differ on your Mac. Every run is also written to `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`, which is the file to send if you need help.
+The version and the number of functions may differ on your Mac.
+
+**The log.** Every run is written to `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`. That is the Library folder at the top level of the Mac's disk, not the hidden Library folder inside your home folder. To make it easy to find, the script also keeps a copy called `Vectorworks fix log.txt` in your Downloads folder and says so at the end of each run. The copy holds every run, not just the latest, and is the file to send if you need help. When Jamf runs the script there is no Downloads folder to use, so only the main log is written.
 
 ## Commands and options
 
@@ -140,6 +160,7 @@ Run every command with `sudo bash vectorworks-iodbc-fix.sh` followed by the opti
 |---|---|
 | `--only "Vectorworks 2025"` | Acts on one installation folder only. Give the folder name, not a full path. |
 | `--yes` or `-y` | Does not ask for confirmation. Use this for unattended runs. |
+| `--accept-unverified-original` | Fixes a Support component even though Vectorworks' own signature on it does not verify. Use it only after reinstalling Vectorworks has not cleared the "original signature does not verify" warning. See [Troubleshooting](#troubleshooting). |
 | `--help` | Shows the built-in help. |
 | `--version` | Shows the script's version number. |
 
@@ -169,7 +190,7 @@ The script is designed to run unattended from a Jamf Pro policy.
 
 **Before you start:** the Command Line Tools must be on each Mac. Deploy them with Jamf before this policy runs. One way is to download the Command Line Tools installer package from [Apple's developer downloads](https://developer.apple.com/download/all/) and deploy it as a package.
 
-**1. Add the script.** In Jamf Pro, go to **Settings > Computer Management > Scripts**, create a script, and paste in the contents of `vectorworks-iodbc-fix.sh`. On the **Options** tab, set the label for **Parameter 4** to `Action` and for **Parameter 5** to `Only This Installation`.
+**1. Add the script.** In Jamf Pro, go to **Settings > Computer Management > Scripts**, create a script, and paste in the contents of `vectorworks-iodbc-fix.sh`. On the **Options** tab, set the label for **Parameter 4** to `Action`, for **Parameter 5** to `Only This Installation` and for **Parameter 6** to `Extra Option`.
 
 When the script runs on its own like this, without the rest of the repository, it downloads the iODBC source from OpenLink's GitHub release page and checks it against the same fixed checksum. The Macs therefore need access to `github.com`. If they do not have it, deploy the whole repository folder as a package and run the script from there instead; it then uses the copy of the source in `vendor/`.
 
@@ -182,6 +203,8 @@ When the script runs on its own like this, without the rest of the repository, i
 | 4 (Action) | `--rollback` | Undoes the fix. |
 | 5 (Only This Installation) | *(empty)* | Acts on every installation. |
 | 5 (Only This Installation) | `Vectorworks 2025` | Acts on that installation folder only. Type the name without quotation marks. |
+| 6 (Extra Option) | *(empty)* | Normal behaviour. |
+| 6 (Extra Option) | `--accept-unverified-original` | Fixes installations whose original signature does not verify. Scope a policy with this to the affected Macs only, after a reinstall has not helped. |
 
 The script recognises how Jamf passes its arguments and never waits for confirmation when run by Jamf. It refuses to run while Vectorworks is open and exits with code 1, which Jamf reports as a failure, so set the policy to run at a time when Vectorworks is usually closed (for example at login or check-in), or let it retry at the next check-in.
 
@@ -222,7 +245,7 @@ It then changes the plug-in's single reference to the library from `/usr/lib/lib
 4. Verifies the iODBC source file against a fixed SHA-256 checksum (a fingerprint that changes if a single byte changes), then compiles it with Apple's compiler in a clean environment, so that nothing else installed on the Mac, such as Homebrew, can influence the result.
 5. Checks the built library: Apple silicon code, the compatibility version (4.0.0) that Vectorworks requires, the modern linking mode, and no dependencies beyond core parts of macOS.
 6. For each affected installation:
-   1. Confirms the plug-in's original Vectorworks signature is intact, which proves it has not been altered already.
+   1. Confirms the plug-in's original Vectorworks signature is intact, which proves it has not been altered already. If it is not, the script shows the reason macOS gives and stops, unless `--accept-unverified-original` was given (see [Troubleshooting](#troubleshooting)).
    2. Confirms that every iODBC function the plug-in uses exists in the built library.
    3. Copies the whole plug-in to a backup and checks the copy file by file against the original.
    4. Makes a staging copy of the plug-in beside the original and applies all changes to that copy only.
@@ -243,7 +266,7 @@ It then changes the plug-in's single reference to the library from `/usr/lib/lib
 **It creates:**
 
 - Backups in `/Library/Application Support/Stabilise/Vectorworks iODBC Fix/backups`, readable only by administrators.
-- A log at `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`.
+- A log at `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`, and a copy called `Vectorworks fix log.txt` in the Downloads folder of the person who ran it.
 
 **It never:**
 
@@ -265,6 +288,8 @@ sudo bash vectorworks-iodbc-fix.sh --rollback
 
 This restores the Support plug-in exactly as Vectorworks installed it, with its original signature, from the most recent backup. On macOS 27, Vectorworks will then fail to start again, as it did before the fix.
 
+If the fix was applied with `--accept-unverified-original`, the backup holds the plug-in exactly as the script found it, including the signature that did not verify. Rollback restores it in that same state. It checks the backup file by file against the checksums recorded when it was taken, instead of checking the signature.
+
 The script will not restore a backup that was taken from a different Vectorworks version than the one now installed, because that would mix components from two versions. After a Vectorworks update the fix is already gone, so there is nothing to roll back.
 
 ## Troubleshooting
@@ -275,14 +300,14 @@ The script will not restore a backup that was taken from a different Vectorworks
 | "Apple's Command Line Tools are not installed" | Run `xcode-select --install`, click Install, wait for it to finish, then run the script again. |
 | "is running" | Save your work, quit Vectorworks, and run the script again. |
 | "Terminal is running under Rosetta" | Quit Terminal, select it in Finder (Applications > Utilities), choose File > Get Info, untick "Open using Rosetta", and try again. |
-| "original signature does not verify" | The Support plug-in has already been altered, possibly by another fix. Reinstall Vectorworks, or run the Vectorworks updater, then run the script again. |
+| "original signature does not verify" | Vectorworks' own signature on the Support plug-in does not check out, and the script shows the reason macOS gives (for example "file modified" followed by a file name). Usually the plug-in has been altered, possibly by another fix: reinstall Vectorworks, or run the Vectorworks updater, then run the script again. Some installations show this even straight after a reinstall, which means they were shipped that way. In that case run the script again with `--accept-unverified-original` added to the command, for example `sudo bash vectorworks-iodbc-fix.sh --accept-unverified-original`. It asks you to confirm, then applies the fix as usual; the fix replaces that signature with a new one in any case. |
 | "Patched by the community Homebrew method" | See [Why not the Homebrew method?](#why-not-the-homebrew-method). |
 | "does not match its published checksum" | The iODBC source file is not the genuine release. The script will not use it. Download this repository again. |
 | "Could not download the iODBC source" | The Mac cannot reach `github.com`. Run the script from the full repository folder, which includes the source, or fix the connection. |
 | "The iODBC library did not build" | The last lines of the compiler output are shown. Send the log to Stabilise. |
 | Vectorworks still does not start after a successful fix | Run `--check`. If it says "Fixed", the startup problem has a different cause that this script does not address. Send the log to Stabilise. |
 
-The log is at `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`. It contains no passwords, licence details or personal data.
+The log is at `/Library/Logs/Stabilise/vectorworks-iodbc-fix.log`, with a copy called `Vectorworks fix log.txt` in your Downloads folder. It contains no passwords, licence details or personal data.
 
 ## Compatibility
 
@@ -291,6 +316,7 @@ The script decides what to fix by inspecting each installation, not by its versi
 | Vectorworks version | Status |
 |---|---|
 | 2025 Update 8 (build 842584) | **Tested** on macOS 27.0 (26A428), Apple silicon, 25/09/2026. The fix applied, Vectorworks launched with the added library loaded, and a second run correctly did nothing. Rollback restored the original Support file byte for byte with its Vectorworks signature, and the original error returned. Refusal while Vectorworks was open, the Jamf Pro run, and the script run on its own (downloading and verifying the source from GitHub) also behaved as documented. |
+| 2022 Dutch edition (build 27.0.684907) | Reported by a user on macOS 27.0.1: the original signature of the Support plug-in does not verify, even after a reinstall. Version 1.1.0 adds `--accept-unverified-original` for this case. Result not yet confirmed. |
 | 2024, 2026 and earlier versions | Should work wherever the check above matches. Not yet tested on a real installation by Stabilise. |
 
 The results of real-installation testing will be recorded here. If you use the script on a version not listed, we would be glad to hear how it went: [hello@stabilise.io](mailto:hello@stabilise.io).
@@ -338,7 +364,7 @@ jamf/extension-attribute.sh  Jamf Pro inventory helper
 docs/TESTING.md              how to test on a real Vectorworks installation
 ```
 
-`tests/run-tests.sh` builds small stand-in Vectorworks installations in a temporary folder, including a stand-in Support plug-in that depends on `/usr/lib/libiodbc.2.dylib` exactly as the real one does, and runs the real script against them. It covers checking, applying, running a second time, detecting damage, rolling back, refusing when Vectorworks is running, refusing an already-altered plug-in, refusing a mismatched backup, refusing a tampered source file, leaving other setups alone and handling Jamf's arguments. After the fix, it loads the stand-in plug-in and calls a real iODBC function through the added library, to prove that the library is found and works.
+`tests/run-tests.sh` builds small stand-in Vectorworks installations in a temporary folder, including a stand-in Support plug-in that depends on `/usr/lib/libiodbc.2.dylib` exactly as the real one does, and runs the real script against them. It covers checking, applying, running a second time, detecting damage, rolling back, refusing when Vectorworks is running, refusing an already-altered or unsigned plug-in, fixing and rolling back such a plug-in with `--accept-unverified-original`, keeping the copy of the log in Downloads, refusing a mismatched backup, refusing a tampered source file, leaving other setups alone and handling Jamf's arguments. After the fix, it loads the stand-in plug-in and calls a real iODBC function through the added library, to prove that the library is found and works.
 
 The tests need an Apple silicon Mac running macOS 27 with the Command Line Tools. They run as a normal user and touch nothing outside their temporary folder:
 
