@@ -316,7 +316,7 @@ The script decides what to fix by inspecting each installation, not by its versi
 | Vectorworks version | Status |
 |---|---|
 | 2025 Update 8 (build 842584) | **Tested** on macOS 27.0 (26A428), Apple silicon, 25/09/2026. The fix applied, Vectorworks launched with the added library loaded, and a second run correctly did nothing. Rollback restored the original Support file byte for byte with its Vectorworks signature, and the original error returned. Refusal while Vectorworks was open, the Jamf Pro run, and the script run on its own (downloading and verifying the source from GitHub) also behaved as documented. |
-| 2022 Dutch edition (build 27.0.684907) | Reported by a user on macOS 27.0.1: the original signature of the Support plug-in does not verify, even after a reinstall. Version 1.1.0 adds `--accept-unverified-original` for this case. Result not yet confirmed. |
+| 2022 Dutch edition (build 27.0.684907) | Reported by a user on macOS 27.0.1: the original signature of the Support plug-in does not verify, even after a reinstall, because the translated text files inside it were changed after Vectorworks signed it. The program code itself checks out. `--accept-unverified-original` (version 1.1.0, corrected in 1.1.1) is for this case. Result not yet confirmed. |
 | 2024, 2026 and earlier versions | Should work wherever the check above matches. Not yet tested on a real installation by Stabilise. |
 
 The results of real-installation testing will be recorded here. If you use the script on a version not listed, we would be glad to hear how it went: [hello@stabilise.io](mailto:hello@stabilise.io).

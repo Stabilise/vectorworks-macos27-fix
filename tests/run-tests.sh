@@ -42,6 +42,24 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && prin
 # Runs the script, capturing output in OUT and the exit code in CODE.
 run() { OUT="$("$SCRIPT" "$@" </dev/null 2>&1)"; CODE=$?; }
 
+# Runs the script in a pseudo-terminal, as a person in Terminal would, with
+# the given options, answering "Continue?" with y and "anyway?" with $1.
+cat > "$T/answer.exp" <<'EOF'
+set timeout 300
+set second [lindex $argv 0]
+spawn {*}[lrange $argv 1 end]
+expect "Continue?" { send "y\r" }
+expect "anyway?" { send "$second\r" }
+expect eof
+catch wait result
+exit [lindex $result 3]
+EOF
+run_tty() {
+  local second="$1"; shift
+  OUT="$(/usr/bin/expect "$T/answer.exp" "$second" "$SCRIPT" "$@" 2>&1)"
+  CODE=$?
+}
+
 expect_code() { if [ "$CODE" -eq "$2" ]; then pass "$1"; else fail "$1 (exit $CODE, expected $2)" "$OUT"; fi; }
 expect_ea()   { local got; got="$(/bin/bash "$EA")"; if [ "$got" = "<result>$2</result>" ]; then pass "$1"; else fail "$1 (got $got)"; fi; }
 expect_out()  { case "$OUT" in *"$2"*) pass "$1" ;; *) fail "$1 (output lacks: $2)" "$OUT" ;; esac; }
@@ -287,6 +305,17 @@ run --apply --accept-unverified-original
 expect_code "the option still needs confirmation when nobody can answer" 1
 [ "$(refs_of "Vectorworks 2025")" = "$OLD_REF" ] && pass "nothing changed without confirmation" || fail "nothing changed without confirmation"
 
+run_tty n --apply --accept-unverified-original
+expect_code "in Terminal, answering no to the second question stops the run" 1
+expect_out  "and says it was skipped" "Skipped. Vectorworks 2025 has not been changed."
+[ "$(refs_of "Vectorworks 2025")" = "$OLD_REF" ] && pass "nothing changed after answering no" || fail "nothing changed after answering no"
+
+run_tty y --apply --accept-unverified-original
+expect_code "in Terminal, answering yes to both questions fixes it" 0
+expect_out  "and reports it as fixed" "Vectorworks 2025: fixed"
+run --rollback --yes
+expect_code "and it rolls back" 0
+
 run --apply --yes --accept-unverified-original
 expect_code "apply with --accept-unverified-original succeeds" 0
 expect_out  "it explains that it is continuing" "--accept-unverified-original was given"
@@ -296,6 +325,7 @@ expect_out  "it reports the installation as fixed" "Vectorworks 2025: fixed"
 "$FIX/probe" "$(support_of "Vectorworks 2025")/Contents/MacOS/Support" >/dev/null 2>&1 && pass "the fixed plug-in loads and calls real iODBC" || fail "the fixed plug-in loads and calls real iODBC"
 B="$VWFIX_STATE_DIR/backups/Vectorworks 2025/$(/bin/ls -1 "$VWFIX_STATE_DIR/backups/Vectorworks 2025" | /usr/bin/tail -n 1)"
 /usr/bin/grep -q '^original_signature=unverified$' "$B/backup-info.txt" && pass "the backup records the unverified signature" || fail "the backup records the unverified signature"
+[ "$(/usr/bin/shasum -a 256 "$STRINGS" | /usr/bin/awk '{print $1}')" = "$ALTERED_SHA" ] && pass "the fix keeps changed resource files, such as translations, as they were" || fail "the fix keeps changed resource files, such as translations, as they were"
 run --check
 expect_code "check reports the forced fix as fixed" 0
 expect_out  "and names it Fixed" "Vectorworks 2025, version 2025.0.8 (790100): Fixed"

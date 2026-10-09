@@ -22,7 +22,7 @@
 
 set -u -o pipefail
 
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.1.1"
 
 readonly IODBC_VERSION="3.52.16"
 readonly IODBC_TARBALL="libiodbc-${IODBC_VERSION}.tar.gz"
@@ -256,12 +256,14 @@ confirm() {
     printf '\n%s [yes, unattended]\n' "$1"
     return 0
   fi
-  if [ ! -t 0 ]; then
+  # Reads from descriptor 3, the script's original input, because questions
+  # asked inside a loop would otherwise read the loop's list instead.
+  if [ ! -t 3 ]; then
     die "This needs a yes or no answer, but it is not running in an interactive Terminal." \
         "Run it in Terminal, or add --yes for unattended use."
   fi
   printf '\n%s [y/N]: ' "$1"
-  read -r answer
+  read -r answer <&3
   case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
 
@@ -856,6 +858,8 @@ EOF
 # ------------------------------------------------------------------ main -----
 
 main() {
+  # Keep the script's original input on descriptor 3 for confirm().
+  exec 3<&0
   parse_args "$@"
   check_root
   start_log
